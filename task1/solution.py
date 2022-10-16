@@ -5,6 +5,7 @@ import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 import matplotlib.pyplot as plt
 from matplotlib import cm
+import sklearn
 
 
 # Set `EXTENDED_EVALUATION` to `True` in order to visualize your predictions.
@@ -32,6 +33,17 @@ class Model(object):
         We already provide a random number generator for reproducibility.
         """
         self.rng = np.random.default_rng(seed=0)
+        self.kernel = 1 * RBF(length_scale=1.0, length_scale_bounds=(1e-2, 1e2))
+        self.gaussian_process = GaussianProcessRegressor(kernel=self.kernel, n_restarts_optimizer=3)
+        # self.kernel2 = RationalQuadratic(length_scale=1.0, alpha=1.0)
+        self.kernel2 = RationalQuadratic(length_scale=1.0, alpha=0.1, alpha_bounds=(1e-5, 1e15))
+        self.gaussian_process = GaussianProcessRegressor(kernel=self.kernel2, n_restarts_optimizer=3)
+        self.kernel3 = Exponentiation(RBF(), 2) + WhiteKernel()
+        self.gaussian_process3 = GaussianProcessRegressor(kernel=self.kernel3, n_restarts_optimizer=3)
+        self.kernel4 = 1 * RBF(length_scale=1.0)
+        self.gaussian_process4 = GaussianProcessRegressor(kernel=self.kernel4, n_restarts_optimizer=3)
+        # gaussian_process.fit(X_train, y_train)
+        # gaussian_process.kernel_
 
         # TODO: Add custom initialization for your model here if necessary
 
@@ -43,10 +55,11 @@ class Model(object):
             Tuple of three 1d NumPy float arrays, each of shape (NUM_SAMPLES,),
             containing your predictions, the GP posterior mean, and the GP posterior stddev (in that order)
         """
+        gp_mean , gp_std = self.gaussian_process.predict(test_features, return_std=True)
 
         # TODO: Use your GP to estimate the posterior mean and stddev for each location here
-        gp_mean = np.zeros(test_features.shape[0], dtype=float)
-        gp_std = np.zeros(test_features.shape[0], dtype=float)
+        # gp_mean = np.zeros(test_features.shape[0], dtype=float)
+        # gp_std = np.zeros(test_features.shape[0], dtype=float)
 
         # TODO: Use the GP posterior to form your predictions here
         predictions = gp_mean
@@ -54,6 +67,32 @@ class Model(object):
         return predictions, gp_mean, gp_std
 
     def fitting_model(self, train_GT: np.ndarray,train_features: np.ndarray):
+        # self.gaussian_process.fit(train_features, train_GT)
+        data_num = train_features.shape[0]
+        print(train_features.shape)
+        
+        self.gaussian_process.fit(train_features[int(data_num/5):int(data_num*4/5)], train_GT[int(data_num/5):int(data_num*4/5)])
+        # self.gaussian_process.fit(train_features[0:100], train_GT[0:100])
+        # self.gaussian_process.fit(train_features[0:2], train_GT[0:2])
+        # likelihood = self.gaussian_process.log_marginal_likelihood_value_
+        # print(likelihood, " gaussian process")
+        # self.gaussian_process2.fit(train_features[int(data_num/5):int(data_num*2/5)], train_GT[int(data_num/5):int(data_num*2/5)])
+        # if likelihood > self.gaussian_process2.log_marginal_likelihood_value_: 
+        #     self.gaussian_process = self.gaussian_process2
+        #     likelihood = self.gaussian_process2.log_marginal_likelihood_value_
+        #     print(likelihood, " gaussian process2")
+        # self.gaussian_process3.fit(train_features[int(data_num/5):int(data_num*2/5)], train_GT[int(data_num/5):int(data_num*2/5)])
+        # if likelihood > self.gaussian_process3.log_marginal_likelihood_value_: 
+        #     self.gaussian_process = self.gaussian_process3
+        #     likelihood = self.gaussian_process3.log_marginal_likelihood_value_
+        #     print(likelihood, " gaussian process3")
+        # self.gaussian_process4.fit(train_features[int(data_num/5):int(data_num*2/5)], train_GT[int(data_num/5):int(data_num*2/5)])
+        # if likelihood > self.gaussian_process4.log_marginal_likelihood_value_: 
+        #     self.gaussian_process = self.gaussian_process4
+        #     likelihood = self.gaussian_process4.log_marginal_likelihood_value_
+        #     print(likelihood, " gaussian process4")
+
+        # print(sklearn.gaussian_process.kernels)
         """
         Fit your model on the given training data.
         :param train_features: Training features as a 2d NumPy float array of shape (NUM_SAMPLES, 2)

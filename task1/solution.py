@@ -32,16 +32,19 @@ class Model(object):
         Initialize your model here.
         We already provide a random number generator for reproducibility.
         """
+        #define different kernels and choose the best one
         self.rng = np.random.default_rng(seed=0)
         self.kernel = 1 * RBF(length_scale=1.0, length_scale_bounds=(1e-2, 1e2))
         self.gaussian_process = GaussianProcessRegressor(kernel=self.kernel, n_restarts_optimizer=3)
         # self.kernel2 = RationalQuadratic(length_scale=1.0, alpha=1.0)
         self.kernel2 = RationalQuadratic(length_scale=1.0, alpha=0.1, alpha_bounds=(1e-5, 1e15))
-        self.gaussian_process = GaussianProcessRegressor(kernel=self.kernel2, n_restarts_optimizer=3)
+        self.gaussian_process2 = GaussianProcessRegressor(kernel=self.kernel2, n_restarts_optimizer=3)
         self.kernel3 = Exponentiation(RBF(), 2) + WhiteKernel()
         self.gaussian_process3 = GaussianProcessRegressor(kernel=self.kernel3, n_restarts_optimizer=3)
         self.kernel4 = 1 * RBF(length_scale=1.0)
         self.gaussian_process4 = GaussianProcessRegressor(kernel=self.kernel4, n_restarts_optimizer=3)
+        self.kernel5 = Matern(nu=1.5, length_scale=20, length_scale_bounds="fixed")
+        self.gaussian_process5 = GaussianProcessRegressor(kernel=self.kernel5, random_state=0)
         # gaussian_process.fit(X_train, y_train)
         # gaussian_process.kernel_
 
@@ -71,26 +74,32 @@ class Model(object):
         data_num = train_features.shape[0]
         print(train_features.shape)
         
+        # Iterate over all kernels
+        self.gaussian_process.fit(train_features[0:2], train_GT[0:2])
+        likelihood = self.gaussian_process.log_marginal_likelihood_value_
+        print(likelihood, " gaussian process")
+        self.gaussian_process2.fit(train_features[int(data_num/5):int(data_num*2/5)], train_GT[int(data_num/5):int(data_num*2/5)])
+        if likelihood > self.gaussian_process2.log_marginal_likelihood_value_: 
+            self.gaussian_process = self.gaussian_process2
+            likelihood = self.gaussian_process2.log_marginal_likelihood_value_
+            print(likelihood, " gaussian process2")
+        self.gaussian_process3.fit(train_features[int(data_num/5):int(data_num*2/5)], train_GT[int(data_num/5):int(data_num*2/5)])
+        if likelihood > self.gaussian_process3.log_marginal_likelihood_value_: 
+            self.gaussian_process = self.gaussian_process3
+            likelihood = self.gaussian_process3.log_marginal_likelihood_value_
+            print(likelihood, " gaussian process3")
+        self.gaussian_process4.fit(train_features[int(data_num/5):int(data_num*2/5)], train_GT[int(data_num/5):int(data_num*2/5)])
+        if likelihood > self.gaussian_process4.log_marginal_likelihood_value_: 
+            self.gaussian_process = self.gaussian_process4
+            likelihood = self.gaussian_process4.log_marginal_likelihood_value_
+            print(likelihood, " gaussian process4")
+        self.gaussian_process5.fit(train_features[int(data_num/5):int(data_num*2/5)], train_GT[int(data_num/5):int(data_num*2/5)])
+        if likelihood > self.gaussian_process5.log_marginal_likelihood_value_: 
+            self.gaussian_process = self.gaussian_process5
+            likelihood = self.gaussian_process5.log_marginal_likelihood_value_
+            print(likelihood, " gaussian process5")
+        # Run on a larger dataset
         self.gaussian_process.fit(train_features[int(data_num/5):int(data_num*4/5)], train_GT[int(data_num/5):int(data_num*4/5)])
-        # self.gaussian_process.fit(train_features[0:100], train_GT[0:100])
-        # self.gaussian_process.fit(train_features[0:2], train_GT[0:2])
-        # likelihood = self.gaussian_process.log_marginal_likelihood_value_
-        # print(likelihood, " gaussian process")
-        # self.gaussian_process2.fit(train_features[int(data_num/5):int(data_num*2/5)], train_GT[int(data_num/5):int(data_num*2/5)])
-        # if likelihood > self.gaussian_process2.log_marginal_likelihood_value_: 
-        #     self.gaussian_process = self.gaussian_process2
-        #     likelihood = self.gaussian_process2.log_marginal_likelihood_value_
-        #     print(likelihood, " gaussian process2")
-        # self.gaussian_process3.fit(train_features[int(data_num/5):int(data_num*2/5)], train_GT[int(data_num/5):int(data_num*2/5)])
-        # if likelihood > self.gaussian_process3.log_marginal_likelihood_value_: 
-        #     self.gaussian_process = self.gaussian_process3
-        #     likelihood = self.gaussian_process3.log_marginal_likelihood_value_
-        #     print(likelihood, " gaussian process3")
-        # self.gaussian_process4.fit(train_features[int(data_num/5):int(data_num*2/5)], train_GT[int(data_num/5):int(data_num*2/5)])
-        # if likelihood > self.gaussian_process4.log_marginal_likelihood_value_: 
-        #     self.gaussian_process = self.gaussian_process4
-        #     likelihood = self.gaussian_process4.log_marginal_likelihood_value_
-        #     print(likelihood, " gaussian process4")
 
         # print(sklearn.gaussian_process.kernels)
         """

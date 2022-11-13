@@ -98,7 +98,7 @@ class Model(object):
             self.gaussian_process = self.gaussian_process5
             likelihood = self.gaussian_process5.log_marginal_likelihood_value_
             print(likelihood, " gaussian process5")
-        # Run on a larger dataset
+        # Fit a larger dataset with the chosen kernel
         self.gaussian_process.fit(train_features[int(data_num/5):int(data_num*4/5)], train_GT[int(data_num/5):int(data_num*4/5)])
 
         # print(sklearn.gaussian_process.kernels)

@@ -20,7 +20,7 @@ class BO_algo():
         fkvar = ConstantKernel(constant_value = 0.5, constant_value_bounds="fixed")
         fnoise = WhiteKernel(noise_level=0.15)
         self.fk = Sum(Product(fk, fkvar),fnoise)
-        self.f_gp = GaussianProcessRegressor(kernel=self.fk, alpha=1e-10, normalize_y=False, optimizer='fmin_l_bfgs_b', n_restarts_optimizer=10)
+        self.f_gp = GaussianProcessRegressor(kernel=self.fk, alpha=0.0, normalize_y=False, optimizer='fmin_l_bfgs_b', n_restarts_optimizer=10)
 
         
         vk = Matern(length_scale=0.5, nu=2.5)
@@ -28,12 +28,10 @@ class BO_algo():
         vkmean = ConstantKernel(constant_value = 1.5)
         vnoise = WhiteKernel(noise_level=0.0001)
         self.vk = Sum(Sum(vkmean, Product(vk, vkvar)),vnoise)
-        self.v_gp = GaussianProcessRegressor(kernel=self.vk, alpha=1e-10, normalize_y=False, optimizer='fmin_l_bfgs_b', n_restarts_optimizer=10)
+        self.v_gp = GaussianProcessRegressor(kernel=self.vk, alpha=0.0, normalize_y=False, optimizer='fmin_l_bfgs_b', n_restarts_optimizer=10)
 
         self.results = np.zeros((1, 3))
         self.iter_count = 0
-    
-        # TODO: enter your code here
 
 
     def next_recommendation(self):
@@ -96,38 +94,19 @@ class BO_algo():
             Value of the acquisition function at x
         """
 
-        # # TODO: enter your code here
-        # raise NotImplementedError
-        f_preds = self.f_gp.predict(np.atleast_2d(x), return_std=True)
-        v_preds = self.v_gp.predict(np.atleast_2d(x), return_std=True)
-        trade_off = 0.01 # 0.9 or 1.96 or 0.05 or 0.01
-        gamma_v = (v_preds[0] - (self.v_min+ trade_off)) / v_preds[1]
-        pi_v = norm.cdf(gamma_v)
+        #refer to https://ekamperi.github.io/machine%20learning/2021/06/11/acquisition-functions.html
+        f_mu, f_sigma = self.f_gp.predict(x.reshape(-1,1), return_std=True)
+        v_mu, v_sigma = self.v_gp.predict(x.reshape(-1,1), return_std=True)
+        f_xi = 0.01 # 0.9 or 1.96 or 0.05 or 0.01
+        v_xi = 0
+        Z_v = (v_mu - self.v_min - v_xi) / v_sigma
+        pi = norm.cdf(Z_v)
 
-        if (pi_v < 0.5):
-            #reshape to fit the correct shape
-            return np.reshape(pi_v, [1])
-        else:
-            # if ProbabilityOfImprovement of V is higher than 1/2, compute the ExpectedImprovement of function F and combine results
-            optimal_x_idx = np.argmax(self.results[:, 1])
-            best_f = self.results[optimal_x_idx, 1]
-            gamma_f = (f_preds[0] - (best_f + trade_off)) / f_preds[1]
-            # Compute EI based on some temporary variables that can be reused in
-            # gradient computation
-            tmp_erf = erf(gamma_f / np.sqrt(2))
-            tmp_ei_no_std = 0.5 * gamma_f * (1 + tmp_erf) \
-                            + np.exp(-gamma_f ** 2 / 2) / np.sqrt(2 * np.pi)
-            ei_f = f_preds[1] * tmp_ei_no_std
-            #reshape to fit the correct shape
-            return np.reshape(pi_v*ei_f, [1])
-        # f= self.f_gp.predict(np.atleast_2d(x), return_std=True)
-        # v = self.v_gp.predict(np.atleast_2d(x), return_std=True)
-        # beta = 1.5
-        # max_f = np.amax(f, axis=1)[1]
-        # ucb = (f[0] - max_f) + f[0]*beta
-
-        # return ucb[0]
-
+        f_max = np.max(self.results[:,1])
+        Z_f = (f_mu - f_max - f_xi) / f_sigma
+        ei = (f_mu - f_max - f_xi) * norm.cdf(Z_f) + f_sigma * norm.pdf(Z_f)
+        # pi_v = norm.cdf(gamma_v)
+        return ei[0]*pi[0]
 
     def add_data_point(self, x, f, v):
         """
@@ -142,31 +121,23 @@ class BO_algo():
         v: np.ndarray
             Model training speed
         """
-        # x = x[0,0]
-        # print(np.hstack((x, f, v)))
-        # print(x)
-        # print(f)
-        # print(v)
         tmp = np.zeros((1,3))
         if self.iter_count == 0:
             self.results[self.iter_count, :] = np.hstack((x, f, v))
         else:
-            # print(tmp.shape)
-            # print(self.results.shape)
             tmp[0, :] = np.hstack((x[0,0], f, v))
             self.results = np.concatenate((self.results, tmp), axis=0)
         self.iter_count += 1
-        x_train = np.transpose(np.atleast_2d(self.results[:self.iter_count, 0]))
-        f_train = np.transpose(np.atleast_2d(self.results[:self.iter_count, 1]))
-        v_train = np.transpose(np.atleast_2d(self.results[:self.iter_count, 2]))
+        x_data = self.results[:self.iter_count, 0].reshape(-1, 1)
+        f_data = self.results[:self.iter_count, 1].reshape(-1, 1)
+        v_data = self.results[:self.iter_count, 2].reshape(-1, 1)
 
         # Fit GPRs
         
-        self.f_gp.fit(x_train, f_train)
-        self.v_gp.fit(x_train, v_train)
+        self.f_gp.fit(x_data, f_data)
+        self.v_gp.fit(x_data, v_data)
 
         # TODO: enter your code here
-        # raise NotImplementedError
 
     def get_solution(self):
         """
@@ -180,8 +151,6 @@ class BO_algo():
         constraint_idx = np.where(self.results[:,2] >= self.v_min)[0]
         satisfied_constraint = self.results[constraint_idx, :]
         print(satisfied_constraint)
-        print(constraint_idx)
-        print(self.results)
         return satisfied_constraint[np.argmax(satisfied_constraint[:,1]), 0]
 
         # TODO: enter your code here

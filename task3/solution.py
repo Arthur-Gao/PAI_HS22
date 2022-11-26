@@ -45,8 +45,6 @@ class BO_algo():
         """
 
         # TODO: enter your code here
-        # In implementing this function, you may use optimize_acquisition_function() defined below.
-        # return np.atleast_2d(self.optimize_acquisition_function())
         return self.optimize_acquisition_function()
         
 
@@ -67,7 +65,6 @@ class BO_algo():
         f_values = []
         x_values = []
 
-        # Restarts the optimization 20 times and pick best solution
         for _ in range(20):
             x0 = domain[:, 0] + (domain[:, 1] - domain[:, 0]) * \
                  np.random.rand(domain.shape[0])
@@ -97,7 +94,7 @@ class BO_algo():
         #refer to https://ekamperi.github.io/machine%20learning/2021/06/11/acquisition-functions.html
         f_mu, f_sigma = self.f_gp.predict(x.reshape(-1,1), return_std=True)
         v_mu, v_sigma = self.v_gp.predict(x.reshape(-1,1), return_std=True)
-        f_xi = 0.01 # 0.9 or 1.96 or 0.05 or 0.01
+        f_xi = 0.01
         v_xi = 0
         Z_v = (v_mu - self.v_min - v_xi) / v_sigma
         pi = norm.cdf(Z_v)
@@ -105,7 +102,6 @@ class BO_algo():
         f_max = np.max(self.results[:,1])
         Z_f = (f_mu - f_max - f_xi) / f_sigma
         ei = (f_mu - f_max - f_xi) * norm.cdf(Z_f) + f_sigma * norm.pdf(Z_f)
-        # pi_v = norm.cdf(gamma_v)
         return ei[0]*pi[0]
 
     def add_data_point(self, x, f, v):
@@ -132,8 +128,6 @@ class BO_algo():
         f_data = self.results[:self.iter_count, 1].reshape(-1, 1)
         v_data = self.results[:self.iter_count, 2].reshape(-1, 1)
 
-        # Fit GPRs
-        
         self.f_gp.fit(x_data, f_data)
         self.v_gp.fit(x_data, v_data)
 

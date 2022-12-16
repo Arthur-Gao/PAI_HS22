@@ -56,10 +56,10 @@ def mlp(sizes, activation, output_activation=nn.Identity):
     layer_num = len(sizes) - 1
     submodel = nn.Sequential()
     for i in range(layer_num - 1):
-        submodel.add_module(nn.Linear(sizes[i], sizes[i + 1]))
-        submodel.add_module(activation)
-    submodel.add_module(nn.Linear(sizes[layer_num - 1], sizes[layer_num]))
-    submodel.add_module(output_activation)
+        submodel.add_module("Linear%.0f" % i, nn.Linear(sizes[i], sizes[i + 1]))
+        submodel.add_module("Activation%.0f" % i, activation())
+    submodel.add_module("outLinear", nn.Linear(sizes[layer_num - 1], sizes[layer_num]))
+    submodel.add_module("outActivation", output_activation())
     return submodel
 
 
@@ -111,7 +111,7 @@ class Actor(nn.Module):
             log likelihood of act.
 
         """
-
+        
         # TODO: Implement this function.
         return pi.log_prob(value=act)
 
@@ -162,7 +162,13 @@ class Critic(nn.Module):
             v: torch.Tensor of shape (n, ), i.e., where n is the number of observations.
                 Value estimate for obs.
         """
-        return torch.squeeze(self.v_net(obs), -1)
+        for i in range(len(self.v_net)):
+            if i == 0:
+                obs = self.v_net[0](obs).detach()
+            else:
+                obs = self.v_net[i](obs)
+        return torch.squeeze(obs, -1)
+        # return torch.squeeze(self.v_net(obs), -1)
 
 
 class VPGBuffer:
@@ -446,19 +452,40 @@ def train(env, seed=0):
         # done for you.
 
         data = buf.get()
-
+        
+        torch.autograd.set_detect_anomaly(True)
         # Do 1 policy gradient update
         actor_optimizer.zero_grad() #reset the gradient in the actor optimizer
-
-        #Hint: you need to compute a 'loss' such that its derivative with respect to the actor
+        # Hint: you need to compute a 'loss' such that its derivative with respect to the actor
         # parameters is the policy gradient. Then call loss.backwards() and actor_optimizer.step()
-
+        pi, log_prob = agent.actor.forward(data['obs'], data['act'])
+        
+        actor_loss = 0
+        for i in range(len(data['ret'])):
+            actor_loss = actor_loss - log_prob[i] * data['ret'][i]
+        
+        actor_loss.backward(retain_graph=True)
+        actor_optimizer.step()
+    
         # We suggest to do 100 iterations of value function updates
-        for _ in range(100):
+        critic_loss = 0
+        for k in range(100):
             critic_optimizer.zero_grad()
-            #compute a loss for the value function, call loss.backwards() and then
-            #critic_optimizer.step()
-
+            # compute a loss for the value function, call loss.backwards() and then
+            # critic_optimizer.step()
+            critic_loss = 0
+            v = agent.critic.forward(data['obs'])
+            delta = data['ret'][:-1] + discount_cumsum(v[1:].detach().numpy(), gamma) - v[:-1]
+            tdres = discount_cumsum(delta.detach().numpy(), gamma*lam)
+            # print(type(tdres))
+            # print(tdres)
+            for i in range(tdres.shape[0]):
+                critic_loss = critic_loss - log_prob[i] * tdres[i]
+            if k < 99:
+                critic_loss.backward(retain_graph=True)
+            else:
+                critic_loss.backward()
+            critic_optimizer.step()   
 
     return agent
 

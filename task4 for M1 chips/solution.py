@@ -1,17 +1,15 @@
 import random
-
-import numpy as np
-import matplotlib.pyplot as plt
-
 import time
 
+import matplotlib.pyplot as plt
+import numpy as np
 import scipy.signal
-from gym.spaces import Box, Discrete
-
 import torch
-from torch.optim import Adam
 import torch.nn as nn
+from gym.spaces import Box, Discrete
 from torch.distributions.categorical import Categorical
+from torch.optim import Adam
+
 
 def discount_cumsum(x, discount):
     """
@@ -141,7 +139,6 @@ class Actor(nn.Module):
         log_prob = self._log_prob_from_distribution(pi, act) if act is not None else None
         return pi, log_prob
 
-
 class Critic(nn.Module):
     """The network used by the value function."""
     def __init__(self, obs_dim, hidden_sizes, activation):
@@ -162,13 +159,7 @@ class Critic(nn.Module):
             v: torch.Tensor of shape (n, ), i.e., where n is the number of observations.
                 Value estimate for obs.
         """
-        for i in range(len(self.v_net)):
-            if i == 0:
-                obs = self.v_net[0](obs).detach()
-            else:
-                obs = self.v_net[i](obs)
-        return torch.squeeze(obs, -1)
-        # return torch.squeeze(self.v_net(obs), -1)
+        return torch.squeeze(self.v_net(obs), -1)
 
 
 class VPGBuffer:
@@ -237,7 +228,7 @@ class VPGBuffer:
 
         # Update pointer after data is stored.
         self.ptr += 1
-
+    
     def end_traj(self, last_val=0):
         """
         Calculate for a trajectory 
@@ -261,14 +252,10 @@ class VPGBuffer:
         rews = np.append(self.rew_buf[path_slice], last_val)
         vals = np.append(self.val_buf[path_slice], last_val)
 
-        self.ret_buf[self.ptr:self.path_start_idx] = (
-            np.cumsum(self.rew_buf[self.ptr:self.path_start_idx][::-1])[::-1]
-        )
-
         # TODO: Implement TD residuals calculation.
         # Hint: use the discount_cumsum function 
         # self.tdres_buf[path_slice] = ...
-        delta = rews[:-1] + discount_cumsum(vals[1:], self.gamma) - vals[:-1]
+        delta = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
         self.tdres_buf[path_slice] = discount_cumsum(delta, self.gamma * self.lam)
 
         # TODO: Implement discounted rewards-to-go calculation. 
@@ -287,7 +274,6 @@ class VPGBuffer:
         assert self.ptr == self.max_size
         self.ptr, self.path_start_idx = 0, 0
 
-        self.tdres_buf = self.tdres_buf
         tdres_mean = np.mean(self.tdres_buf)
         tdres_std = np.std(self.tdres_buf)
         self.tdres_buf = (self.tdres_buf - tdres_mean) / tdres_std
@@ -299,6 +285,7 @@ class VPGBuffer:
 
 class Agent:
     def __init__(self, env, activation=nn.Tanh):
+        super().__init__()
         self.env = env
         self.hid = 64  # layer width of networks
         self.l = 2  # layer number of networks
@@ -333,7 +320,7 @@ class Agent:
             pi, _ = self.actor.forward(state)
             act = pi.sample()
             v = self.critic.forward(state)
-            logp = pi.log_prob(act)
+            _, logp = self.actor.forward(state, act)
         return act.item(), v.item(), logp.item()
 
     def act(self, state):
@@ -359,10 +346,10 @@ class Agent:
 
         # TODO: Implement this function.
         # Currently, this just returns a random action.
-        return self.act(torch.from_numpy(obs))
+        return self.act(torch.as_tensor(obs, dtype=torch.float32))
 
 
-def train(env, seed=0):
+def train(env, seed=0, ):
     """
     Main training loop.
 
@@ -388,7 +375,7 @@ def train(env, seed=0):
     # Number of training steps per epoch
     steps_per_epoch = 3000
     # Number of epochs to train for
-    epochs = 50
+    epochs = 65
     # The longest an episode can go on before cutting it off
     max_ep_len = 300
     # Discount factor for weighting future rewards
@@ -410,7 +397,6 @@ def train(env, seed=0):
 
     # Initialize the environment
     state, ep_ret, ep_len = agent.env.reset(), 0, 0
-
     # Main training loop: collect experience in env and update / log each epoch
     for epoch in range(epochs):
         ep_returns = []
@@ -447,46 +433,26 @@ def train(env, seed=0):
         # This is the end of an epoch, so here is where you likely want to update
         # the actor and / or critic function.
 
-
         # TODO: Implement the policy and value function updates. Hint: some of the torch code is
         # done for you.
 
         data = buf.get()
         
-        torch.autograd.set_detect_anomaly(True)
         # Do 1 policy gradient update
         actor_optimizer.zero_grad() #reset the gradient in the actor optimizer
-        # Hint: you need to compute a 'loss' such that its derivative with respect to the actor
-        # parameters is the policy gradient. Then call loss.backwards() and actor_optimizer.step()
-        pi, log_prob = agent.actor.forward(data['obs'], data['act'])
-        
-        actor_loss = 0
-        for i in range(len(data['ret'])):
-            actor_loss = actor_loss - log_prob[i] * data['ret'][i]
-        
-        actor_loss.backward(retain_graph=True)
+        _, log_prob = agent.actor.forward(data['obs'], data['act'])
+        actor_loss = torch.mul(-data['tdres'], log_prob).mean()
+        actor_loss.backward()
         actor_optimizer.step()
-    
+        
         # We suggest to do 100 iterations of value function updates
-        critic_loss = 0
-        for k in range(100):
+        for _ in range(100):
             critic_optimizer.zero_grad()
-            # compute a loss for the value function, call loss.backwards() and then
-            # critic_optimizer.step()
-            critic_loss = 0
             v = agent.critic.forward(data['obs'])
-            delta = data['ret'][:-1] + discount_cumsum(v[1:].detach().numpy(), gamma) - v[:-1]
-            tdres = discount_cumsum(delta.detach().numpy(), gamma*lam)
-            # print(type(tdres))
-            # print(tdres)
-            for i in range(tdres.shape[0]):
-                critic_loss = critic_loss - log_prob[i] * tdres[i]
-            if k < 99:
-                critic_loss.backward(retain_graph=True)
-            else:
-                critic_loss.backward()
-            critic_optimizer.step()   
-
+            critic_loss = torch.sum(torch.square(v - data['ret']))
+            critic_loss.backward()
+            critic_optimizer.step()
+            
     return agent
 
 
@@ -499,8 +465,9 @@ def main():
     This function is only meant for testing purposes. Any changes made here do not
     affect the submission. 
     """
-    from lunar_lander import LunarLander
     from gym.wrappers.monitoring.video_recorder import VideoRecorder
+
+    from lunar_lander import LunarLander
 
     env = LunarLander()
     env.seed(0)

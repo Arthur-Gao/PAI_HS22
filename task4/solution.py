@@ -11,6 +11,8 @@ from gym.spaces import Box, Discrete
 import torch
 from torch.optim import Adam
 import torch.nn as nn
+
+
 from torch.distributions.categorical import Categorical
 
 def discount_cumsum(x, discount):
@@ -53,14 +55,12 @@ def mlp(sizes, activation, output_activation=nn.Identity):
 
     # TODO: Implement this function.
     # Hint: Use nn.Sequential to stack multiple layers of the network.
-    layer_num = len(sizes) - 1
-    submodel = nn.Sequential()
-    for i in range(layer_num - 1):
-        submodel.add_module("Linear%.0f" % i, nn.Linear(sizes[i], sizes[i + 1]))
-        submodel.add_module("Activation%.0f" % i, activation())
-    submodel.add_module("outLinear", nn.Linear(sizes[layer_num - 1], sizes[layer_num]))
-    submodel.add_module("outActivation", output_activation())
-    return submodel
+
+    layers = []
+    for j in range(len(sizes) - 1):
+        act = activation if j < len(sizes) - 2 else output_activation
+        layers += [nn.Linear(sizes[j], sizes[j + 1]), act()]
+    return nn.Sequential(*layers)
 
 
 class Actor(nn.Module):
@@ -69,6 +69,8 @@ class Actor(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
         super().__init__()
         self.logits_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
+
+
 
     def _distribution(self, obs):
         """
@@ -90,7 +92,8 @@ class Actor(nn.Module):
         # Hint: The logits_net returns for a given observation the log 
         # probabilities. You should use them to obtain a Categorical 
         # distribution.
-        return Categorical(logits=self.logits_net(obs))
+        logits = self.logits_net(obs)
+        return Categorical(logits=logits)
 
     def _log_prob_from_distribution(self, pi, act):
         """
@@ -111,9 +114,10 @@ class Actor(nn.Module):
             log likelihood of act.
 
         """
-        
+
         # TODO: Implement this function.
-        return pi.log_prob(value=act)
+
+        return pi.log_prob(act)
 
     def forward(self, obs, act=None):
         """
@@ -137,9 +141,12 @@ class Actor(nn.Module):
 
         # TODO: Implement this function.
         # Hint: If act is None, log_prob is also None.
+
         pi = self._distribution(obs)
-        log_prob = self._log_prob_from_distribution(pi, act) if act is not None else None
-        return pi, log_prob
+        logp_a = None
+        if act is not None:
+            logp_a = self._log_prob_from_distribution(pi, act)
+        return pi, logp_a
 
 
 class Critic(nn.Module):
@@ -148,6 +155,7 @@ class Critic(nn.Module):
         super().__init__()
         self.v_net = mlp([obs_dim] + list(hidden_sizes) + [1], activation)
         
+
     def forward(self, obs):
         """
         Return the value estimate for a given observation.
@@ -162,13 +170,7 @@ class Critic(nn.Module):
             v: torch.Tensor of shape (n, ), i.e., where n is the number of observations.
                 Value estimate for obs.
         """
-        for i in range(len(self.v_net)):
-            if i == 0:
-                obs = self.v_net[0](obs).detach()
-            else:
-                obs = self.v_net[i](obs)
-        return torch.squeeze(obs, -1)
-        # return torch.squeeze(self.v_net(obs), -1)
+        return torch.squeeze(self.v_net(obs), -1)
 
 
 class VPGBuffer:
@@ -179,7 +181,7 @@ class VPGBuffer:
         self.obs_buf = np.zeros(combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(combined_shape(size, act_dim), dtype=np.float32)
         # calculated TD residuals
-        self.tdres_buf = np.zeros(size, dtype=np.float32)
+        self.phi_buf = np.zeros(size, dtype=np.float32)
         # rewards
         self.rew_buf = np.zeros(size, dtype=np.float32)
         # trajectory's remaining return
@@ -226,16 +228,18 @@ class VPGBuffer:
         """
 
         # buffer has to have room so you can store
-        assert self.ptr < self.max_size
+
 
         # TODO: Store new data in the respective buffers.
+
+
+        # Update pointer after data is stored.
+        assert self.ptr < self.max_size
         self.obs_buf[self.ptr] = obs
         self.act_buf[self.ptr] = act
         self.rew_buf[self.ptr] = rew
         self.val_buf[self.ptr] = val
         self.logp_buf[self.ptr] = logp
-
-        # Update pointer after data is stored.
         self.ptr += 1
 
     def end_traj(self, last_val=0):
@@ -261,23 +265,25 @@ class VPGBuffer:
         rews = np.append(self.rew_buf[path_slice], last_val)
         vals = np.append(self.val_buf[path_slice], last_val)
 
-        self.ret_buf[self.ptr:self.path_start_idx] = (
-            np.cumsum(self.rew_buf[self.ptr:self.path_start_idx][::-1])[::-1]
-        )
+
 
         # TODO: Implement TD residuals calculation.
         # Hint: use the discount_cumsum function 
         # self.tdres_buf[path_slice] = ...
-        delta = rews[:-1] + discount_cumsum(vals[1:], self.gamma) - vals[:-1]
-        self.tdres_buf[path_slice] = discount_cumsum(delta, self.gamma * self.lam)
+        deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
+        self.phi_buf[path_slice] = discount_cumsum(deltas, self.gamma * self.lam)
 
         # TODO: Implement discounted rewards-to-go calculation. 
         # Hint: use the discount_cumsum function 
         # self.ret_buf[path_slice] = ...
         self.ret_buf[path_slice] = discount_cumsum(rews[:-1], self.gamma)
 
+
         # Update the path_start_idx
         self.path_start_idx = self.ptr
+
+
+
 
     def get(self):
         """
@@ -287,25 +293,28 @@ class VPGBuffer:
         assert self.ptr == self.max_size
         self.ptr, self.path_start_idx = 0, 0
 
-        self.tdres_buf = self.tdres_buf
-        tdres_mean = np.mean(self.tdres_buf)
-        tdres_std = np.std(self.tdres_buf)
-        self.tdres_buf = (self.tdres_buf - tdres_mean) / tdres_std
+        #self.tdres_buf = self.tdres_buf
+        #tdres_mean = np.mean(self.tdres_buf)
+        #tdres_std = np.std(self.tdres_buf)
+        #self.tdres_buf = (self.tdres_buf - tdres_mean) / tdres_std
+        self.phi_buf = (self.phi_buf - self.phi_buf.mean()) / self.phi_buf.std()
 
         data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
-                    tdres=self.tdres_buf, logp=self.logp_buf)
+                    phi=self.phi_buf, logp=self.logp_buf)
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
 
 
 class Agent:
     def __init__(self, env, activation=nn.Tanh):
+        super().__init__()
         self.env = env
         self.hid = 64  # layer width of networks
         self.l = 2  # layer number of networks
         hidden_sizes = [self.hid]*self.l
         obs_dim = 8
-        self.actor = Actor(obs_dim, 4, hidden_sizes, activation)
-        self.critic = Critic(obs_dim, hidden_sizes, activation)
+
+        self.pi = Actor(obs_dim, 4, hidden_sizes, activation)
+        self.v = Critic(obs_dim, hidden_sizes, activation)
 
     def step(self, state):
         """
@@ -329,12 +338,13 @@ class Agent:
         # TODO: Implement this function.
         # Hint: This function is only called during inference. You should use
         # `torch.no_grad` to ensure that it does not interfer with the gradient computation.
+
         with torch.no_grad():
-            pi, _ = self.actor.forward(state)
-            act = pi.sample()
-            v = self.critic.forward(state)
-            logp = pi.log_prob(act)
-        return act.item(), v.item(), logp.item()
+            pi, _ = self.pi(state)
+            a = pi.sample()
+            _, log_p = self.pi(state, a)
+            v = self.v(state)
+        return a.item(), v, log_p
 
     def act(self, state):
         return self.step(state)[0]
@@ -359,10 +369,11 @@ class Agent:
 
         # TODO: Implement this function.
         # Currently, this just returns a random action.
-        return self.act(torch.from_numpy(obs))
+        
+        return self.step(torch.as_tensor(obs, dtype=torch.float32))[0]
 
 
-def train(env, seed=0):
+def train(env, seed=0, ):
     """
     Main training loop.
 
@@ -375,20 +386,21 @@ def train(env, seed=0):
 
     # TODO: In this function, you implement the actor and critic updates.
 
+
     # The observations are 8 dimensional vectors, and the actions are numbers,
     # i.e. 0-dimensional vectors (hence act_dim is an empty list).
     obs_dim = [8]
     act_dim = []
 
     # initialize agent
-    agent = Agent(env)
+    ac = Agent(env)
 
     # Training parameters
     # You may wish to change the following settings for the buffer and training
     # Number of training steps per epoch
     steps_per_epoch = 3000
     # Number of epochs to train for
-    epochs = 50
+    epochs = 80
     # The longest an episode can go on before cutting it off
     max_ep_len = 300
     # Discount factor for weighting future rewards
@@ -396,6 +408,7 @@ def train(env, seed=0):
     lam = 0.97
 
     # Learning rates for actor and critic function
+
     actor_lr = 3e-3
     critic_lr = 1e-3
 
@@ -405,19 +418,19 @@ def train(env, seed=0):
     # Initialize the ADAM optimizer using the parameters
     # of the actor and then critic networks
     # TODO: Use these optimizers later to update the actor and critic networks.
-    actor_optimizer = Adam(agent.actor.parameters(), lr=actor_lr)
-    critic_optimizer = Adam(agent.critic.parameters(), lr=critic_lr)
+    actor_optimizer = Adam(ac.pi.parameters(), lr=actor_lr)
+    critic_optimizer = Adam(ac.v.parameters(), lr=critic_lr)
 
     # Initialize the environment
-    state, ep_ret, ep_len = agent.env.reset(), 0, 0
+    state, ep_ret, ep_len = ac.env.reset(), 0, 0
 
     # Main training loop: collect experience in env and update / log each epoch
     for epoch in range(epochs):
         ep_returns = []
         for t in range(steps_per_epoch):
-            a, v, logp = agent.step(torch.as_tensor(state, dtype=torch.float32))
+            a, v, logp = ac.step(torch.as_tensor(state, dtype=torch.float32))
 
-            next_state, r, terminal = agent.env.transition(a)
+            next_state, r, terminal = ac.env.transition(a)
             ep_ret += r
             ep_len += 1
 
@@ -433,13 +446,13 @@ def train(env, seed=0):
             if terminal or timeout or epoch_ended:
                 # if trajectory didn't reach terminal state, bootstrap value target
                 if epoch_ended:
-                    _, v, _ = agent.step(torch.as_tensor(state, dtype=torch.float32))
+                    _, v, _ = ac.step(torch.as_tensor(state, dtype=torch.float32))
                 else:
                     v = 0
                 if timeout or terminal:
                     ep_returns.append(ep_ret)  # only store return when episode ended
                 buf.end_traj(v)
-                state, ep_ret, ep_len = agent.env.reset(), 0, 0
+                state, ep_ret, ep_len = ac.env.reset(), 0, 0
 
         mean_return = np.mean(ep_returns) if len(ep_returns) > 0 else np.nan
         print(f"Epoch: {epoch+1}/{epochs}, mean return {mean_return}")
@@ -452,42 +465,34 @@ def train(env, seed=0):
         # done for you.
 
         data = buf.get()
-        
-        torch.autograd.set_detect_anomaly(True)
+        obs = data['obs']
+        act = data['act']
+        phi = data['phi']
+        ret = data['ret']
+
+
+
         # Do 1 policy gradient update
         actor_optimizer.zero_grad() #reset the gradient in the actor optimizer
-        # Hint: you need to compute a 'loss' such that its derivative with respect to the actor
-        # parameters is the policy gradient. Then call loss.backwards() and actor_optimizer.step()
-        pi, log_prob = agent.actor.forward(data['obs'], data['act'])
-        
-        actor_loss = 0
-        for i in range(len(data['ret'])):
-            actor_loss = actor_loss - log_prob[i] * data['ret'][i]
-        
-        actor_loss.backward(retain_graph=True)
+        _, logp = ac.pi(obs, act)
+        loss_pi = torch.mul(-phi, logp).mean()
+        loss_pi.backward()
         actor_optimizer.step()
-    
-        # We suggest to do 100 iterations of value function updates
-        critic_loss = 0
-        for k in range(100):
-            critic_optimizer.zero_grad()
-            # compute a loss for the value function, call loss.backwards() and then
-            # critic_optimizer.step()
-            critic_loss = 0
-            v = agent.critic.forward(data['obs'])
-            delta = data['ret'][:-1] + discount_cumsum(v[1:].detach().numpy(), gamma) - v[:-1]
-            tdres = discount_cumsum(delta.detach().numpy(), gamma*lam)
-            # print(type(tdres))
-            # print(tdres)
-            for i in range(tdres.shape[0]):
-                critic_loss = critic_loss - log_prob[i] * tdres[i]
-            if k < 99:
-                critic_loss.backward(retain_graph=True)
-            else:
-                critic_loss.backward()
-            critic_optimizer.step()   
+        #Hint: you need to compute a 'loss' such that its derivative with respect to the actor
+        # parameters is the policy gradient. Then call loss.backwards() and actor_optimizer.step()
 
-    return agent
+        # We suggest to do 100 iterations of value function updates
+        critic_optimizer.zero_grad()
+        for _ in range(100):
+            val = ac.v(obs)
+            loss_v = torch.sum(torch.square(val - ret))
+            loss_v.backward()
+            critic_optimizer.step()
+            #compute a loss for the value function, call loss.backwards() and then
+            #critic_optimizer.step()
+
+
+    return ac
 
 
 def main():
